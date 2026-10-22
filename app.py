@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import sqlite3
+from datetime import datetime
 import folium
-
 from streamlit_folium import st_folium
-from send_alert import send_sms
 
 
 # =========================================================
@@ -11,95 +12,200 @@ from send_alert import send_sms
 # =========================================================
 
 st.set_page_config(
-    page_title="AI Landslide Early Warning System",
-    page_icon="🌋",
-    layout="wide"
+    page_title="AI Landslide Early Warning",
+    page_icon="🌍",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 
 # =========================================================
-# TITLE
+# CUSTOM CSS
 # =========================================================
 
-st.title("🌋 AI-Powered Landslide Early Warning & Monitoring System")
+st.markdown("""
+<style>
 
-st.markdown(
-    """
-    **AI + Terrain + Rainfall Based Risk Monitoring Dashboard**
+html, body, [class*="css"] {
+    font-family: Arial, sans-serif;
+}
 
-    This prototype estimates landslide risk using terrain features
-    and simulated rainfall conditions.
-    """
-)
+.stApp {
+    background: #f7f9fc;
+    color: #172033;
+}
+
+/* Main content */
+
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+    max-width: 1450px;
+}
+
+/* Sidebar */
+
+section[data-testid="stSidebar"] {
+    background: #ffffff;
+    border-right: 1px solid #e5e7eb;
+}
+
+section[data-testid="stSidebar"] * {
+    color: #85ab90 !important;
+}
+
+/* Headings */
+
+h1, h2, h3, h4 {
+    color: #111827 !important;
+}
+
+/* Normal text */
+
+p, label {
+    color: #172033;
+}
+
+/* Selectbox */
+
+div[data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border: 1px solid #d1d5db !important;
+    color: #054de8 !important;
+}
+
+/* Slider */
+
+div[data-testid="stSlider"] {
+    padding-top: 5px;
+}
+
+/* Metrics */
+
+div[data-testid="stMetric"] {
+    background: white;
+    border: 1px solid #e5e7eb;
+    padding: 18px;
+    border-radius: 14px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.04);
+}
+
+div[data-testid="stMetricLabel"] {
+    color: #6b7280 !important;
+}
+
+div[data-testid="stMetricValue"] {
+    color: #111827 !important;
+}
+
+/* Buttons */
+
+.stButton > button {
+    border-radius: 10px;
+    border: 1px solid #2563eb;
+    background: #2563eb;
+    color: white !important;
+    font-weight: 600;
+    padding: 0.6rem 1rem;
+}
+
+.stButton > button:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+}
+
+/* Dataframe */
+
+div[data-testid="stDataFrame"] {
+    border-radius: 12px;
+}
+
+/* Alerts */
+
+div[data-testid="stAlert"] {
+    border-radius: 12px;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 
 # =========================================================
-# LOAD DATA
+# HELPER FUNCTIONS
 # =========================================================
 
-@st.cache_data
-def load_data():
+def html_card(title, value, subtitle=""):
+    st.html(f"""
+    <div style="
+        background:#ffffff;
+        border:1px solid #e5e7eb;
+        border-radius:16px;
+        padding:20px;
+        margin-bottom:15px;
+        box-shadow:0 5px 18px rgba(0,0,0,0.05);
+    ">
+        <div style="
+            font-size:13px;
+            color:#6b7280;
+            font-weight:600;
+            margin-bottom:8px;
+        ">
+            {title}
+        </div>
 
-    return pd.read_csv(
-        "dynamic_risk_predictions.csv"
-    )
+        <div style="
+            font-size:28px;
+            color:#111827;
+            font-weight:700;
+        ">
+            {value}
+        </div>
 
-
-try:
-
-    df = load_data()
-
-except FileNotFoundError:
-
-    st.error(
-        "❌ dynamic_risk_predictions.csv not found."
-    )
-
-    st.stop()
-
-
-# =========================================================
-# CHECK COLUMNS
-# =========================================================
-
-required_columns = [
-    "Latitude",
-    "Longitude",
-    "Elevation_m",
-    "Slope_deg",
-    "Risk_Score",
-    "Rainfall_mm",
-    "Dynamic_Risk_Score"
-]
-
-
-missing_columns = [
-    col
-    for col in required_columns
-    if col not in df.columns
-]
+        <div style="
+            font-size:13px;
+            color:#6b7280;
+            margin-top:5px;
+        ">
+            {subtitle}
+        </div>
+    </div>
+    """)
 
 
-if missing_columns:
+def risk_color(level):
 
-    st.error(
-        f"❌ Missing columns: {missing_columns}"
-    )
+    if level == "Very High":
+        return "#dc2626"
 
-    st.write(
-        "Available columns:"
-    )
+    if level == "High":
+        return "#ea580c"
 
-    st.write(
-        df.columns.tolist()
-    )
+    if level == "Medium":
+        return "#ca8a04"
 
-    st.stop()
+    return "#16a34a"
 
 
-# =========================================================
-# RISK LEVEL
-# =========================================================
+def rainfall_factor(rainfall):
+
+    if rainfall <= 0:
+        return 0
+
+    elif rainfall < 10:
+        return 20
+
+    elif rainfall < 25:
+        return 40
+
+    elif rainfall < 50:
+        return 60
+
+    elif rainfall < 75:
+        return 80
+
+    else:
+        return 100
+
 
 def get_risk_level(score):
 
@@ -109,706 +215,713 @@ def get_risk_level(score):
     elif score >= 60:
         return "High"
 
-    elif score >= 40:
+    elif score >= 25:
         return "Medium"
 
     else:
         return "Low"
 
 
-# =========================================================
-# RAINFALL FACTOR
-# =========================================================
-
-def rainfall_factor(rainfall):
+def rainfall_condition(rainfall):
 
     if rainfall <= 0:
-
-        return 0
+        return "No Rainfall"
 
     elif rainfall < 10:
-
-        return 20
+        return "Light Rainfall"
 
     elif rainfall < 25:
-
-        return 40
+        return "Moderate Rainfall"
 
     elif rainfall < 50:
-
-        return 60
+        return "Heavy Rainfall"
 
     elif rainfall < 75:
-
-        return 80
+        return "Very Heavy Rainfall"
 
     else:
+        return "Extreme Rainfall"
 
-        return 100
+
+# =========================================================
+# DATABASE
+# =========================================================
+
+def init_database():
+
+    conn = sqlite3.connect("alert_log.db")
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_key TEXT UNIQUE,
+            latitude REAL,
+            longitude REAL,
+            risk_level TEXT,
+            risk_score REAL,
+            rainfall REAL,
+            status TEXT,
+            message TEXT,
+            created_at TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def alert_already_processed(alert_key):
+
+    conn = sqlite3.connect("alert_log.db")
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT id FROM alerts WHERE alert_key = ?",
+        (alert_key,)
+    )
+
+    result = cursor.fetchone()
+
+    conn.close()
+
+    return result is not None
+
+
+def save_alert(
+    alert_key,
+    latitude,
+    longitude,
+    risk_level,
+    risk_score,
+    rainfall,
+    status,
+    message
+):
+
+    conn = sqlite3.connect("alert_log.db")
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO alerts
+        (
+            alert_key,
+            latitude,
+            longitude,
+            risk_level,
+            risk_score,
+            rainfall,
+            status,
+            message,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        alert_key,
+        latitude,
+        longitude,
+        risk_level,
+        risk_score,
+        rainfall,
+        status,
+        message,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+
+@st.cache_data
+def load_data():
+
+    df = pd.read_csv("dynamic_risk_predictions.csv")
+
+    df["Latitude"] = pd.to_numeric(
+        df["Latitude"],
+        errors="coerce"
+    )
+
+    df["Longitude"] = pd.to_numeric(
+        df["Longitude"],
+        errors="coerce"
+    )
+
+    df["Elevation_m"] = pd.to_numeric(
+        df["Elevation_m"],
+        errors="coerce"
+    )
+
+    df["Slope_deg"] = pd.to_numeric(
+        df["Slope_deg"],
+        errors="coerce"
+    )
+
+    df["Risk_Score"] = pd.to_numeric(
+        df["Risk_Score"],
+        errors="coerce"
+    )
+
+    df = df.dropna(
+        subset=[
+            "Latitude",
+            "Longitude",
+            "Elevation_m",
+            "Slope_deg",
+            "Risk_Score"
+        ]
+    )
+
+    return df
+
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+
+try:
+
+    df = load_data()
+
+except Exception as e:
+
+    st.error(
+        "Dataset loading failed. Make sure dynamic_risk_predictions.csv "
+        "is inside the project folder."
+    )
+
+    st.stop()
+
+
+init_database()
 
 
 # =========================================================
 # SIDEBAR
 # =========================================================
 
-st.sidebar.header(
-    "⚙️ Risk Simulation"
-)
+with st.sidebar:
 
+    st.markdown("""
+    <div style="
+        font-size:24px;
+        font-weight:800;
+        color:#111827;
+        margin-bottom:5px;
+    ">
+        🌍 Landslide AI
+    </div>
 
-st.sidebar.info(
-    """
-    Simulate rainfall conditions and
-    observe the change in landslide risk.
-    """
-)
+    <div style="
+        font-size:13px;
+        color:#305eba;
+        margin-bottom:25px;
+    ">
+        Early Warning & Monitoring
+    </div>
+    """, unsafe_allow_html=True)
 
+    st.markdown("### 📍 Select Location")
 
-# =========================================================
-# LOCATION SELECTION
-# =========================================================
+    location_options = [
+        f"{row.Latitude:.6f}, {row.Longitude:.6f}"
+        for row in df.itertuples()
+    ]
 
-location_labels = []
-
-
-for index, row in df.iterrows():
-
-    label = (
-        f"{index} | "
-        f"{row['Latitude']:.5f}, "
-        f"{row['Longitude']:.5f}"
+    selected_location = st.selectbox(
+        "Location",
+        location_options
     )
 
-    location_labels.append(
-        label
+    latitude, longitude = map(
+        float,
+        selected_location.split(", ")
     )
 
+    selected_rows = df[
+        (df["Latitude"].round(6) == round(latitude, 6))
+        &
+        (df["Longitude"].round(6) == round(longitude, 6))
+    ]
 
-selected_location = st.sidebar.selectbox(
-    "📍 Select Monitoring Location",
-    location_labels
-)
+    if selected_rows.empty:
 
+        st.error("Selected location was not found.")
 
-selected_index = int(
-    selected_location.split("|")[0].strip()
-)
+        st.stop()
 
+    selected = selected_rows.iloc[0]
 
-selected_row = df.iloc[
-    selected_index
-]
+    st.markdown("---")
 
+    st.markdown("### 🌧️ Rainfall Simulation")
 
-# =========================================================
-# LOCATION DATA
-# =========================================================
+    rainfall = st.slider(
+        "Rainfall (mm)",
+        min_value=0,
+        max_value=150,
+        value=0,
+        step=5
+    )
 
-latitude = float(
-    selected_row["Latitude"]
-)
+    st.caption(
+        "Prototype simulation input. "
+        "It is not live rainfall."
+    )
 
+    st.markdown("---")
 
-longitude = float(
-    selected_row["Longitude"]
-)
+    st.markdown("### 📊 System")
 
-
-elevation = float(
-    selected_row["Elevation_m"]
-)
-
-
-slope = float(
-    selected_row["Slope_deg"]
-)
-
-
-# IMPORTANT:
-# Your CSV column is Risk_Score
-
-base_risk = float(
-    selected_row["Risk_Score"]
-)
+    st.write("**ML Model:** Random Forest")
+    st.write("**Features:** Elevation + Slope")
+    st.write("**Map:** Folium + OpenStreetMap")
+    st.write("**Database:** SQLite")
+    st.write("**Alert:** Twilio SMS")
 
 
 # =========================================================
-# RAINFALL SIMULATION
+# CALCULATE DYNAMIC RISK
 # =========================================================
 
-st.sidebar.subheader(
-    "🌧️ Rainfall Simulation"
-)
+ml_risk = float(selected["Risk_Score"])
 
+rain_factor = rainfall_factor(rainfall)
 
-rainfall = st.sidebar.slider(
-    "Simulated Rainfall (mm)",
-    min_value=0.0,
-    max_value=100.0,
-    value=10.0,
-    step=1.0
-)
-
-
-# =========================================================
-# CALCULATE RAINFALL FACTOR
-# =========================================================
-
-rain_factor = rainfall_factor(
-    rainfall
-)
-
-
-# =========================================================
-# DYNAMIC RISK
-# =========================================================
-
-dynamic_risk = (
-    base_risk * 0.70
+dynamic_score = (
+    ml_risk * 0.70
     +
     rain_factor * 0.30
 )
 
-
-dynamic_risk = max(
-    0,
-    min(
-        100,
-        dynamic_risk
-    )
+dynamic_score = min(
+    max(dynamic_score, 0),
+    100
 )
 
+dynamic_level = get_risk_level(dynamic_score)
 
-# =========================================================
-# RISK LEVEL
-# =========================================================
+color = risk_color(dynamic_level)
 
-risk_level = get_risk_level(
-    dynamic_risk
-)
+condition = rainfall_condition(rainfall)
 
 
 # =========================================================
-# RAINFALL CONDITION
+# HERO
 # =========================================================
 
-if rainfall == 0:
+st.html(f"""
+<div style="
+    background:linear-gradient(135deg,#ffffff,#eef5ff);
+    border:1px solid #dbe5f1;
+    border-radius:22px;
+    padding:34px;
+    margin-bottom:25px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.05);
+">
 
-    rainfall_condition = "No Rainfall"
+    <div style="
+        font-size:13px;
+        font-weight:700;
+        color:#2563eb;
+        letter-spacing:1px;
+        margin-bottom:10px;
+    ">
+        AI / ML BASED DISASTER MANAGEMENT
+    </div>
 
-elif rainfall < 10:
+    <div style="
+        font-size:38px;
+        font-weight:800;
+        color:#111827;
+        line-height:1.2;
+    ">
+        Landslide Early Warning
+        & Monitoring System
+    </div>
 
-    rainfall_condition = "Light Rainfall"
+    <div style="
+        font-size:16px;
+        color:#6b7280;
+        margin-top:12px;
+        max-width:850px;
+        line-height:1.6;
+    ">
+        A geospatial AI decision-support system that combines
+        terrain-based ML risk estimation with rainfall conditions
+        to generate dynamic landslide risk and automatic warnings.
+    </div>
 
-elif rainfall < 25:
-
-    rainfall_condition = "Moderate Rainfall"
-
-elif rainfall < 50:
-
-    rainfall_condition = "Heavy Rainfall"
-
-elif rainfall < 75:
-
-    rainfall_condition = "Very Heavy Rainfall"
-
-else:
-
-    rainfall_condition = "Extreme Rainfall"
-
-
-# =========================================================
-# WARNING MESSAGE
-# =========================================================
-
-if risk_level == "Very High":
-
-    warning_message = (
-        "🚨 VERY HIGH RISK — Immediate precaution recommended."
-    )
-
-    recommended_action = (
-        "Evacuate vulnerable areas if advised by authorities "
-        "and continuously monitor the location."
-    )
-
-
-elif risk_level == "High":
-
-    warning_message = (
-        "⚠️ HIGH RISK — Close monitoring required."
-    )
-
-    recommended_action = (
-        "Inspect the area and prepare emergency response."
-    )
-
-
-elif risk_level == "Medium":
-
-    warning_message = (
-        "🟡 MEDIUM RISK — Continue monitoring."
-    )
-
-    recommended_action = (
-        "Monitor rainfall and terrain conditions."
-    )
-
-
-else:
-
-    warning_message = (
-        "🟢 LOW RISK — Normal monitoring."
-    )
-
-    recommended_action = (
-        "No immediate action required."
-    )
+</div>
+""")
 
 
 # =========================================================
-# DASHBOARD METRICS
+# TOP METRICS
 # =========================================================
 
-st.subheader(
-    "📊 Current Risk Status"
-)
+st.markdown("## 📊 Current Risk Overview")
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.metric(
+        "Dynamic Risk",
+        f"{dynamic_score:.1f}%"
+    )
+
+with c2:
+    st.metric(
+        "Risk Level",
+        dynamic_level
+    )
+
+with c3:
+    st.metric(
+        "Rainfall",
+        f"{rainfall} mm"
+    )
+
+with c4:
+    st.metric(
+        "ML Risk",
+        f"{ml_risk:.1f}%"
+    )
 
 
-col1, col2, col3, col4 = st.columns(
-    4
-)
+# =========================================================
+# LOCATION ANALYSIS
+# =========================================================
 
+st.markdown("## 📍 Selected Location")
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    html_card(
+        "LATITUDE",
+        f"{latitude:.6f}",
+        "Selected coordinate"
+    )
+
+with c2:
+    html_card(
+        "LONGITUDE",
+        f"{longitude:.6f}",
+        "Selected coordinate"
+    )
+
+with c3:
+    html_card(
+        "ELEVATION",
+        f"{selected['Elevation_m']:.0f} m",
+        "Terrain elevation"
+    )
+
+with c4:
+    html_card(
+        "SLOPE",
+        f"{selected['Slope_deg']:.2f}°",
+        "Terrain slope"
+    )
+
+
+# =========================================================
+# AI ANALYSIS
+# =========================================================
+
+st.markdown("## 🤖 AI Risk Analysis")
+
+st.html(f"""
+<div style="
+    background:#ffffff;
+    border:1px solid #e5e7eb;
+    border-left:6px solid {color};
+    border-radius:16px;
+    padding:24px;
+    margin-bottom:20px;
+    box-shadow:0 5px 18px rgba(0,0,0,0.05);
+">
+
+    <div style="
+        font-size:14px;
+        color:#6b7280;
+        font-weight:600;
+    ">
+        CURRENT AI ASSESSMENT
+    </div>
+
+    <div style="
+        font-size:32px;
+        font-weight:800;
+        color:{color};
+        margin-top:5px;
+    ">
+        {dynamic_level}
+    </div>
+
+    <div style="
+        font-size:18px;
+        font-weight:700;
+        color:#111827;
+        margin-top:8px;
+    ">
+        Dynamic Risk Score: {dynamic_score:.1f}%
+    </div>
+
+    <div style="
+        font-size:14px;
+        color:#6b7280;
+        margin-top:12px;
+        line-height:1.6;
+    ">
+        ML Risk: {ml_risk:.1f}% |
+        Rainfall: {rainfall} mm |
+        Rainfall Condition: {condition}
+    </div>
+
+</div>
+""")
+
+
+# =========================================================
+# RAINFALL IMPACT
+# =========================================================
+
+st.markdown("## 🌧️ Rainfall Impact")
+
+col1, col2 = st.columns(2)
 
 with col1:
 
     st.metric(
-        "Risk Score",
-        f"{dynamic_risk:.1f}%"
+        "Rainfall Factor",
+        f"{rain_factor:.0f}/100"
     )
-
 
 with col2:
 
     st.metric(
-        "Risk Level",
-        risk_level
+        "Dynamic Risk",
+        f"{dynamic_score:.1f}%"
     )
 
-
-with col3:
-
-    st.metric(
-        "Rainfall",
-        f"{rainfall:.1f} mm"
-    )
-
-
-with col4:
-
-    st.metric(
-        "Slope",
-        f"{slope:.1f}°"
-    )
-
-
-# =========================================================
-# WARNING STATUS
-# =========================================================
-
-st.subheader(
-    "🚨 Warning Status"
+st.progress(
+    int(dynamic_score)
 )
 
 
-if risk_level == "Very High":
+# =========================================================
+# AUTOMATIC WARNING ENGINE
+# =========================================================
+
+st.markdown("## 🚨 Automatic Warning Engine")
+
+
+if dynamic_score >= 80:
+
+    alert_type = "CRITICAL"
 
     st.error(
-        warning_message
+        f"🚨 VERY HIGH RISK — Automatic critical alert triggered."
     )
 
+elif dynamic_score >= 60:
 
-elif risk_level == "High":
+    alert_type = "WARNING"
 
     st.warning(
-        warning_message
+        f"⚠️ HIGH RISK — Automatic warning alert triggered."
     )
-
-
-elif risk_level == "Medium":
-
-    st.warning(
-        warning_message
-    )
-
 
 else:
+
+    alert_type = None
 
     st.success(
-        warning_message
-    )
-
-
-st.info(
-    f"Recommended Action: {recommended_action}"
-)
-
-
-# =========================================================
-# LOCATION DETAILS
-# =========================================================
-
-st.subheader(
-    "📍 Selected Location"
-)
-
-
-c1, c2, c3 = st.columns(
-    3
-)
-
-
-with c1:
-
-    st.metric(
-        "Latitude",
-        f"{latitude:.6f}"
-    )
-
-    st.metric(
-        "Elevation",
-        f"{elevation:.1f} m"
-    )
-
-
-with c2:
-
-    st.metric(
-        "Longitude",
-        f"{longitude:.6f}"
-    )
-
-    st.metric(
-        "Slope",
-        f"{slope:.2f}°"
-    )
-
-
-with c3:
-
-    st.metric(
-        "Base ML Risk",
-        f"{base_risk:.1f}%"
-    )
-
-    st.metric(
-        "Rainfall Condition",
-        rainfall_condition
+        "✅ Risk is below the automatic alert threshold."
     )
 
 
 # =========================================================
-# RISK CHANGE
+# AUTOMATIC SMS
 # =========================================================
 
-risk_change = (
-    dynamic_risk - base_risk
-)
+if alert_type is not None:
 
+    # Bucket rainfall so Streamlit reruns do not repeatedly send SMS
+    rainfall_bucket = int(rainfall // 10) * 10
 
-st.subheader(
-    "📈 Risk Change"
-)
-
-
-if risk_change > 0:
-
-    st.warning(
-        f"⬆️ Risk increased by "
-        f"{risk_change:.1f}% due to rainfall."
+    alert_key = (
+        f"{latitude:.6f}_"
+        f"{longitude:.6f}_"
+        f"{alert_type}_"
+        f"{rainfall_bucket}"
     )
 
-
-elif risk_change < 0:
-
-    st.success(
-        f"⬇️ Risk decreased by "
-        f"{abs(risk_change):.1f}%."
-    )
-
-
-else:
-
-    st.info(
-        "➡️ No change in risk."
-    )
-
-
-# =========================================================
-# SMS ALERT
-# =========================================================
-
-st.subheader(
-    "📱 Emergency SMS Alert"
-)
-
-
-receiver_number = st.text_input(
-    "Emergency Contact Number",
-    placeholder="+91XXXXXXXXXX"
-)
-
-
-if risk_level in [
-    "High",
-    "Very High"
-]:
-
-    st.warning(
-        "⚠️ High-risk condition detected. "
-        "Emergency SMS can be sent."
-    )
-
-
-else:
-
-    st.info(
-        "SMS alert becomes available when "
-        "risk reaches High or Very High."
-    )
-
-
-# =========================================================
-# SMS MESSAGE
-# =========================================================
-
-sms_message = f"""
-LANDSLIDE WARNING 🚨
-
-Location:
-{latitude:.6f}, {longitude:.6f}
-
-Risk Level:
-{risk_level}
-
-Risk Score:
-{dynamic_risk:.1f}%
-
-Rainfall:
-{rainfall:.1f} mm
-
-Elevation:
-{elevation:.1f} m
-
-Slope:
-{slope:.2f} degrees
-
-Rainfall Condition:
-{rainfall_condition}
-
-Recommended Action:
-{recommended_action}
+    sms_message = f"""
+LANDSLIDE ALERT 🚨
 
 AI Landslide Early Warning System
-"""
 
+Risk Level: {dynamic_level}
+Risk Score: {dynamic_score:.1f}%
 
-# =========================================================
-# SEND SMS BUTTON
-# =========================================================
+Location:
+Lat: {latitude:.6f}
+Lon: {longitude:.6f}
 
-if st.button(
-    "🚨 Send SMS Alert",
-    use_container_width=True
-):
+Rainfall: {rainfall} mm
+Condition: {condition}
 
-    if risk_level not in [
-        "High",
-        "Very High"
-    ]:
+Elevation: {selected['Elevation_m']:.0f} m
+Slope: {selected['Slope_deg']:.2f}°
 
-        st.info(
-            "SMS alert is available only for "
-            "High or Very High risk."
-        )
+Action:
+Inspect the area and prepare emergency response.
 
+This is an AI-based risk estimation.
+    """.strip()
 
-    elif not receiver_number:
+    # Only process once for this risk/rainfall combination
 
-        st.error(
-            "❌ Please enter an emergency contact number."
-        )
-
-
-    else:
-
-        # =================================================
-        # REAL TWILIO SMS
-        # =================================================
+    if not alert_already_processed(alert_key):
 
         try:
+
+            from send_alert import send_sms
+
+            receiver_number = st.secrets.get(
+                "ALERT_RECEIVER_NUMBER",
+                ""
+            )
+
+            if receiver_number == "":
+
+                raise Exception(
+                    "ALERT_RECEIVER_NUMBER is not configured"
+                )
 
             message_sid = send_sms(
                 sms_message,
                 receiver_number
             )
 
-
-            st.success(
-                "✅ REAL SMS sent successfully!"
-            )
-
-
-            st.write(
-                "Twilio Message SID:"
-            )
-
-
-            st.code(
-                message_sid
-            )
-
-
-        # =================================================
-        # DEMO FALLBACK
-        # =================================================
-
-        except Exception as e:
-
-            st.warning(
-                "⚠️ Real SMS could not be sent."
-            )
-
-
-            st.info(
-                "🧪 Switching to DEMO SMS mode "
-                "for hackathon demonstration."
-            )
-
-
-            st.success(
-                "✅ DEMO SMS ALERT GENERATED!"
-            )
-
-
-            st.markdown(
-                "### 📱 SMS Preview"
-            )
-
-
-            st.code(
+            save_alert(
+                alert_key,
+                latitude,
+                longitude,
+                dynamic_level,
+                dynamic_score,
+                rainfall,
+                "SMS_SENT",
                 sms_message
             )
 
-
-            st.caption(
-                "Demo mode: No actual SMS was sent."
+            st.success(
+                "📱 Automatic SMS alert sent successfully."
             )
 
+            st.caption(
+                f"Message SID: {message_sid}"
+            )
 
-            with st.expander(
-                "Show Twilio error"
-            ):
+        except Exception as e:
 
-                st.code(
-                    str(e)
-                )
+            # Demo fallback
+            save_alert(
+                alert_key,
+                latitude,
+                longitude,
+                dynamic_level,
+                dynamic_score,
+                rainfall,
+                "DEMO_ALERT",
+                sms_message
+            )
+
+            st.info(
+                "📱 Automatic alert generated successfully."
+            )
+
+            st.warning(
+                "Twilio delivery is currently unavailable. "
+                "The system has generated the alert in demo mode."
+            )
+
+    else:
+
+        st.info(
+            "📱 Alert already processed for this "
+            "location/risk/rainfall condition."
+        )
+
+    st.markdown("### 📩 Alert Message Preview")
+
+    st.code(
+        sms_message,
+        language="text"
+    )
 
 
 # =========================================================
-# RISK MAP
+# MAP
 # =========================================================
 
-st.subheader(
-    "🗺️ Landslide Risk Map"
-)
+st.markdown("## 🗺️ Interactive Landslide Risk Map")
 
+map_center = [
+    latitude,
+    longitude
+]
 
 m = folium.Map(
-    location=[
-        latitude,
-        longitude
-    ],
+    location=map_center,
     zoom_start=8,
     tiles="OpenStreetMap"
 )
 
 
-# =========================================================
-# ADD ALL RISK POINTS
-# =========================================================
+# Add risk points
 
 for _, row in df.iterrows():
 
-    point_lat = float(
-        row["Latitude"]
-    )
+    score = float(row["Risk_Score"])
 
+    level = get_risk_level(score)
 
-    point_lon = float(
-        row["Longitude"]
-    )
-
-
-    point_risk = float(
-        row["Dynamic_Risk_Score"]
-    )
-
-
-    point_level = get_risk_level(
-        point_risk
-    )
-
-
-    # Risk colour
-
-    if point_level == "Very High":
-
-        color = "red"
-
-    elif point_level == "High":
-
-        color = "orange"
-
-    elif point_level == "Medium":
-
-        color = "yellow"
-
-    else:
-
-        color = "green"
-
-
-    popup_text = f"""
-    <b>Risk Level:</b> {point_level}<br>
-    <b>Risk Score:</b> {point_risk:.1f}%<br>
-    <b>Latitude:</b> {point_lat:.6f}<br>
-    <b>Longitude:</b> {point_lon:.6f}<br>
-    <b>Elevation:</b> {float(row['Elevation_m']):.1f} m<br>
-    <b>Slope:</b> {float(row['Slope_deg']):.2f}°
-    """
-
+    marker_color = risk_color(level)
 
     folium.CircleMarker(
         location=[
-            point_lat,
-            point_lon
+            row["Latitude"],
+            row["Longitude"]
         ],
-        radius=5,
-        color=color,
+        radius=4,
+        color=marker_color,
         fill=True,
-        fill_color=color,
-        fill_opacity=0.7,
+        fill_color=marker_color,
+        fill_opacity=0.75,
         popup=folium.Popup(
-            popup_text,
+            f"""
+            <b>Risk Level:</b> {level}<br>
+            <b>Risk Score:</b> {score:.1f}%<br>
+            <b>Elevation:</b> {row['Elevation_m']:.0f} m<br>
+            <b>Slope:</b> {row['Slope_deg']:.2f}°
+            """,
             max_width=300
         )
     ).add_to(m)
 
 
-# =========================================================
-# SELECTED LOCATION MARKER
-# =========================================================
+# Selected location marker
 
 folium.Marker(
     location=[
@@ -817,148 +930,220 @@ folium.Marker(
     ],
     popup=folium.Popup(
         f"""
-        <b>Selected Monitoring Location</b><br><br>
-
-        Risk: {dynamic_risk:.1f}%<br>
-
-        Level: {risk_level}<br>
-
-        Rainfall: {rainfall:.1f} mm<br>
-
-        Elevation: {elevation:.1f} m<br>
-
-        Slope: {slope:.2f}°
+        <b>Selected Location</b><br>
+        Risk: {dynamic_level}<br>
+        Dynamic Score: {dynamic_score:.1f}%<br>
+        Rainfall: {rainfall} mm
         """,
         max_width=300
     ),
-    tooltip="Selected Location"
+    tooltip="Selected Location",
+    icon=folium.Icon(
+        color="blue",
+        icon="info-sign"
+    )
 ).add_to(m)
 
-
-# =========================================================
-# DISPLAY MAP
-# =========================================================
 
 st_folium(
     m,
     width=None,
-    height=650
+    height=650,
+    returned_objects=[]
 )
+
+
+# =========================================================
+# MAP LEGEND
+# =========================================================
+
+st.markdown("### Risk Legend")
+
+l1, l2, l3, l4 = st.columns(4)
+
+with l1:
+    st.success("🟢 LOW — 0–24")
+
+with l2:
+    st.warning("🟡 MEDIUM — 25–59")
+
+with l3:
+    st.warning("🟠 HIGH — 60–79")
+
+with l4:
+    st.error("🔴 VERY HIGH — 80–100")
+
+
+# =========================================================
+# DATASET INTELLIGENCE
+# =========================================================
+
+st.markdown("## 🧠 Dataset Intelligence")
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.metric(
+        "Total Records",
+        f"{len(df):,}"
+    )
+
+with c2:
+    st.metric(
+        "Positive Samples",
+        f"{int((df['Label'] == 1).sum()):,}"
+    )
+
+with c3:
+    st.metric(
+        "Negative Samples",
+        f"{int((df['Label'] == 0).sum()):,}"
+    )
+
+with c4:
+    st.metric(
+        "ML Model",
+        "Random Forest"
+    )
 
 
 # =========================================================
 # RISK DISTRIBUTION
 # =========================================================
 
-st.subheader(
-    "📊 Risk Distribution"
-)
-
+st.markdown("## 📈 Risk Distribution")
 
 risk_distribution = (
-    df["Dynamic_Risk_Score"]
-    .apply(get_risk_level)
+    df["Risk_Level"]
     .value_counts()
+    .reindex(
+        ["Low", "Medium", "High", "Very High"],
+        fill_value=0
+    )
 )
 
-
-st.bar_chart(
-    risk_distribution
-)
+st.bar_chart(risk_distribution)
 
 
 # =========================================================
-# MONITORING TABLE
+# SELECTED LOCATION DATA
 # =========================================================
 
-st.subheader(
-    "📋 Monitoring Data"
-)
+st.markdown("## 🔎 Selected ML Data")
 
+display_columns = [
+    "Latitude",
+    "Longitude",
+    "Elevation_m",
+    "Slope_deg",
+    "Risk_Score",
+    "Risk_Level"
+]
 
-display_df = df.copy()
-
-
-display_df["Risk_Level"] = (
-    display_df[
-        "Dynamic_Risk_Score"
-    ]
-    .apply(get_risk_level)
-)
-
+available_columns = [
+    col for col in display_columns
+    if col in df.columns
+]
 
 st.dataframe(
-    display_df[
-        [
-            "Latitude",
-            "Longitude",
-            "Elevation_m",
-            "Slope_deg",
-            "Risk_Score",
-            "Rainfall_mm",
-            "Dynamic_Risk_Score",
-            "Risk_Level"
-        ]
-    ],
-    use_container_width=True
+    selected[available_columns].to_frame().T,
+    use_container_width=True,
+    hide_index=True
 )
 
 
 # =========================================================
-# SYSTEM WORKFLOW
+# SYSTEM PIPELINE
 # =========================================================
 
-st.divider()
+st.markdown("## ⚙️ AI System Pipeline")
 
+pipeline = [
+    ("01", "Data Collection", "GSI + Terrain Data"),
+    ("02", "Feature Engineering", "Elevation + Slope"),
+    ("03", "Machine Learning", "Random Forest"),
+    ("04", "Risk Estimation", "ML Risk Score"),
+    ("05", "Dynamic Analysis", "Rainfall + ML Risk"),
+    ("06", "Visualization", "Streamlit + Folium"),
+    ("07", "Alert Engine", "Automatic Warning"),
+    ("08", "Notification", "Twilio SMS")
+]
 
-st.subheader(
-    "🔄 System Workflow"
-)
+cols = st.columns(4)
 
+for index, item in enumerate(pipeline):
 
-st.markdown(
-    """
-    **Terrain Data**
-    
-    ↓
-    
-    **Elevation + Slope**
-    
-    ↓
-    
-    **Random Forest ML Model**
-    
-    ↓
-    
-    **Base Risk Score**
-    
-    ↓
-    
-    **Rainfall Simulation**
-    
-    ↓
-    
-    **Dynamic Risk Score**
-    
-    ↓
-    
-    **Warning Level**
-    
-    ↓
-    
-    **Real SMS / Demo SMS Alert**
-    """
-)
+    number, title, description = item
+
+    with cols[index % 4]:
+
+        st.html(f"""
+        <div style="
+            background:#ffffff;
+            border:1px solid #e5e7eb;
+            border-radius:14px;
+            padding:18px;
+            margin-bottom:18px;
+            min-height:130px;
+            box-shadow:0 4px 15px rgba(0,0,0,0.04);
+        ">
+
+            <div style="
+                font-size:12px;
+                font-weight:800;
+                color:#2563eb;
+            ">
+                {number}
+            </div>
+
+            <div style="
+                font-size:17px;
+                font-weight:700;
+                color:#111827;
+                margin-top:6px;
+            ">
+                {title}
+            </div>
+
+            <div style="
+                font-size:13px;
+                color:#6b7280;
+                margin-top:6px;
+            ">
+                {description}
+            </div>
+
+        </div>
+        """)
 
 
 # =========================================================
 # FOOTER
 # =========================================================
 
-st.divider()
+st.markdown("---")
 
+st.html("""
+<div style="
+    text-align:center;
+    padding:20px;
+    color:#6b7280;
+">
 
-st.caption(
-    "🌋 AI-Powered Landslide Early Warning & Monitoring System | "
-    "Hackathon Prototype"
-)
+    <div style="
+        font-size:15px;
+        font-weight:700;
+        color:#111827;
+    ">
+        AI/ML-Based Landslide Early Warning & Monitoring System
+    </div>
+
+    <div style="
+        font-size:13px;
+        margin-top:6px;
+    ">
+        Decision-support prototype for disaster risk management
+    </div>
+
+</div>
+""")
